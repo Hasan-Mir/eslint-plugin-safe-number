@@ -1,0 +1,32 @@
+{
+  "name": "eslint-plugin-safe-number",
+  "version": "1.0.0",
+  "description": "ESLint rules to detect unsafe numeric conversions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "typescript",
+    "numbers",
+    "safety"
+  ],
+  "license": "ISC",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "eslint": ">=8",
+    "@typescript-eslint/parser": ">=7"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "@typescript-eslint/utils": "^8.47.0",
+    "@typescript-eslint/parser": "^8.47.0",
+    "typescript": "^5.9.3"
+  }
+}
