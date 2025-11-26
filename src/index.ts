@@ -1,7 +1,5 @@
-import NoUnsafeNumberConversion from "./rules/no-unsafe-number-conversion";
+import { noUnsafeNumberConversion } from "./rules/no-unsafe-number-conversion";
 
-export default {
-  rules: {
-    "no-unsafe-number-conversion": NoUnsafeNumberConversion,
-  },
+export const rules = {
+  "no-unsafe-number-conversion": noUnsafeNumberConversion,
 };

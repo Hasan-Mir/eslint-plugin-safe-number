@@ -1,12 +1,15 @@
 {
   "compilerOptions": {
-    "target": "es2015",
-    "module": "CommonJS",
+    "target": "es2020",
+    "module": "node16",
     "lib": ["ES2020"],
     "strict": true,
 
+    // Fix for "hybrid module kind" error
+    "isolatedModules": true,
+
     // Required for type-aware rules
-    "moduleResolution": "Node",
+    "moduleResolution": "node16",
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -21,6 +24,6 @@
     // Allows you to use modern JS features inside the rule
     "allowJs": false
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
   "exclude": ["dist", "node_modules"]
 }

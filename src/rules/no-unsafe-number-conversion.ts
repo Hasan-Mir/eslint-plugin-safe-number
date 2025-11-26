@@ -1,87 +1,71 @@
-import { ESLintUtils, ASTUtils } from "@typescript-eslint/utils";
-import * as ts from "typescript";
+import { ESLintUtils, AST_NODE_TYPES } from "@typescript-eslint/utils";
+import ts from "typescript";
 
-const createRule = ESLintUtils.RuleCreator(() => ``);
+// 1. Setup the Rule Creator
+const createRule = ESLintUtils.RuleCreator((name) => `https://example.com/rule/${name}`);
 
-const rule = createRule({
-  name: "no-number-on-null",
+// 2. Helper to check if a type includes Null
+function isNullableType(type: ts.Type, checker: ts.TypeChecker): boolean {
+  // Check if the type itself is explicitly Null
+  if (type.getFlags() & ts.TypeFlags.Null) {
+    return true;
+  }
+
+  // If it's a Union type (e.g., number | null), check all parts
+  if (type.isUnion()) {
+    return type.types.some((t) => isNullableType(t, checker));
+  }
+
+  return false;
+}
+
+// 3. Define the Rule
+export const noUnsafeNumberConversion = createRule({
+  name: "no-unsafe-number-conversion",
   meta: {
     type: "problem",
     docs: {
-      description: "Disallow converting values that could be null using global Number()",
+      description: "Disallow converting null values to Number (which results in 0)",
     },
     messages: {
-      unsafeNumberNull:
-        "Avoid using global Number() on values that can be null, as Number(null) results in 0. Handle null explicitly.",
+      unsafeConversion:
+        'Unsafe conversion to Number(). The value might be "null", which converts to 0 silently. Handle null explicitly first.',
     },
     schema: [],
   },
   defaultOptions: [],
   create(context) {
-    const parserServices = ESLintUtils.getParserServices(context);
-    const checker = parserServices.program.getTypeChecker();
+    // 4. Get Parser Services (Access to TS Compiler)
+    const services = ESLintUtils.getParserServices(context);
+    const checker = services.program.getTypeChecker();
 
     return {
       CallExpression(node) {
-        // 1. Basic Check: Is the callee an Identifier named 'Number'?
-        if (node.callee.type !== "Identifier" || node.callee.name !== "Number") {
+        // Ensure we are calling "Number(...)"
+        if (node.callee.type !== AST_NODE_TYPES.Identifier || node.callee.name !== "Number") {
           return;
         }
 
-        // 2. Global Check: Ensure 'Number' is not shadowed by a local variable
-        // We get the scope of the current node
-        const scope = context.sourceCode.getScope(node);
-
-        // We look for the variable 'Number' in this scope or parent scopes
-        const variable = ASTUtils.findVariable(scope, "Number");
-
-        // If the variable is found AND has definitions (defs.length > 0),
-        // it means it was defined in the code (local variable, import, etc.)
-        // so it is NOT the global Number constructor.
-        if (variable && variable.defs.length > 0) {
-          return;
-        }
-
-        // 3. Argument Check: Ensure there is at least one argument
-        if (node.arguments.length === 0) {
+        // Ensure there is exactly 1 argument
+        if (node.arguments.length !== 1) {
           return;
         }
 
         const argument = node.arguments[0];
-        const tsNode = parserServices.esTreeNodeToTSNodeMap.get(argument);
+
+        // 5. Get the TypeScript Type of the argument
+        // We use the original TS Node for the type checker
+        const tsNode = services.esTreeNodeToTSNodeMap.get(argument);
         const type = checker.getTypeAtLocation(tsNode);
 
-        // 4. Type Check: Does the type include Null?
-        if (isNullableType(type)) {
+        // 6. Check if type includes Null
+        if (isNullableType(type, checker)) {
           context.report({
-            node: node,
-            messageId: "unsafeNumberNull",
+            node: argument,
+            messageId: "unsafeConversion",
           });
         }
       },
     };
   },
 });
-
-/**
- * Helper to check if a type is strictly null or a union containing null.
- */
-function isNullableType(type: ts.Type): boolean {
-  // Check strict Null flag
-  if ((type.getFlags() & ts.TypeFlags.Null) !== 0) {
-    return true;
-  }
-
-  // Check Union types (e.g. string | null)
-  if (type.isUnion()) {
-    for (const part of type.types) {
-      if ((part.getFlags() & ts.TypeFlags.Null) !== 0) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-export default rule;
