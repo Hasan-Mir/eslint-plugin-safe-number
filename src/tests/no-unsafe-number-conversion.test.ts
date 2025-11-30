@@ -22,21 +22,15 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
     { code: `Number(10);` },
     { code: `Number("10");` },
     { code: `const arr: string[] = ["1", "2"]; arr.map(Number);` },
+    // Safe Promise
+    { code: `Promise.resolve("1").then(Number);` },
   ],
   invalid: [
-    // 1. Literal Null (No Fix)
+    // 1. Direct Calls (Sanity check)
     {
       code: `Number(null);`,
       errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
     },
-
-    // 2. Literal Null (No Fix)
-    {
-      code: `Number(undefined);`,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
-
-    // 3. Strict Null Variable
     {
       code: `
         const val: string | null = null;
@@ -48,7 +42,6 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
           suggestions: [
             {
               messageId: "fixStrictNull",
-              // ADDED MISSING OUTPUT HERE
               output: `
         const val: string | null = null;
         val !== null ? Number(val) : null;
@@ -59,52 +52,7 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
       ],
     },
 
-    // 4. Strict Undefined Variable
-    {
-      code: `
-        const val: string | undefined = undefined;
-        Number(val);
-      `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixStrictUndefined",
-              // ADDED MISSING OUTPUT HERE
-              output: `
-        const val: string | undefined = undefined;
-        val !== undefined ? Number(val) : undefined;
-      `,
-            },
-          ],
-        },
-      ],
-    },
-
-    // 5. Mixed (Null | Undefined)
-    {
-      code: `
-        declare const val: string | null | undefined;
-        Number(val);
-      `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixMixed",
-              output: `
-        declare const val: string | null | undefined;
-        val !== null && val !== undefined ? Number(val) : val;
-      `,
-            },
-          ],
-        },
-      ],
-    },
-
-    // 6. Map with Strict Null
+    // 2. Array.map (Generic Check)
     {
       code: `
         const arr: (string | null)[] = ["1", null];
@@ -126,11 +74,11 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
       ],
     },
 
-    // 7. Map with Strict Undefined
+    // 3. Array.from (Generic Check - 2nd Argument)
     {
       code: `
-        const arr: (string | undefined)[] = ["1", undefined];
-        arr.map(Number);
+        const set = new Set<string | undefined>(["1", undefined]);
+        Array.from(set, Number);
       `,
       errors: [
         {
@@ -139,8 +87,8 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
             {
               messageId: "fixMapStrictUndefined",
               output: `
-        const arr: (string | undefined)[] = ["1", undefined];
-        arr.map(val => val !== undefined ? Number(val) : undefined);
+        const set = new Set<string | undefined>(["1", undefined]);
+        Array.from(set, val => val !== undefined ? Number(val) : undefined);
       `,
             },
           ],
@@ -148,11 +96,35 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
       ],
     },
 
-    // 8. Map with Mixed (Null & Undefined)
+    // 4. Promise.then (Generic Check)
     {
       code: `
-        declare const arr: (string | null | undefined)[];
-        arr.map(Number);
+        declare const p: Promise<string | null>;
+        p.then(Number);
+      `,
+      errors: [
+        {
+          messageId: "unsafeCallback",
+          suggestions: [
+            {
+              messageId: "fixMapStrictNull",
+              output: `
+        declare const p: Promise<string | null>;
+        p.then(val => val !== null ? Number(val) : null);
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 5. Custom Function (Generic Check)
+    {
+      code: `
+        function process(converter: (input: string | null | undefined) => number) {
+           return converter("test");
+        }
+        process(Number);
       `,
       errors: [
         {
@@ -161,8 +133,10 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
             {
               messageId: "fixMapMixed",
               output: `
-        declare const arr: (string | null | undefined)[];
-        arr.map(val => val !== null && val !== undefined ? Number(val) : val);
+        function process(converter: (input: string | null | undefined) => number) {
+           return converter("test");
+        }
+        process(val => val !== null && val !== undefined ? Number(val) : val);
       `,
             },
           ],

@@ -1,5 +1,5 @@
 import { AST_NODE_TYPES, ESLintUtils, TSESLint } from "@typescript-eslint/utils";
-import * as ts from "typescript";
+import ts from "typescript";
 
 type MessageIds =
   | "unsafeConversion"
@@ -12,7 +12,10 @@ type MessageIds =
   | "fixMapMixed";
 
 type Options = [];
-const createRule = ESLintUtils.RuleCreator((name) => `https://example.com/rule/${name}`);
+
+const createRule = ESLintUtils.RuleCreator(
+  (name) => `https://github.com/Hasan-Mir/eslint-plugin-safe-number/blob/main/src/rules/${name}.ts`
+);
 
 function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
   let hasNull = false;
@@ -43,16 +46,17 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
     hasSuggestions: true,
     messages: {
       unsafeConversion: "Unsafe conversion to Number(). The value might be null or undefined.",
-      unsafeCallback: 'Unsafe passing of "Number" as callback. The array may contain nulls.',
+      unsafeCallback:
+        'Unsafe passing of "Number" as callback. The input to the callback may be null/undefined.',
       // Direct Fixes
       fixStrictNull: "Guard with null check: val !== null ? Number(val) : null",
       fixStrictUndefined: "Guard with undefined check: val !== undefined ? Number(val) : undefined",
       fixMixed: "Guard with strict null/undefined checks",
-      // Map/Callback Fixes
-      fixMapStrictNull: "Use safe arrow function: val => val !== null ? Number(val) : null",
+      // Callback Fixes
+      fixMapStrictNull: "Wrap in arrow function: val => val !== null ? Number(val) : null",
       fixMapStrictUndefined:
-        "Use safe arrow function: val => val !== undefined ? Number(val) : undefined",
-      fixMapMixed: "Use safe arrow function with strict checks",
+        "Wrap in arrow function: val => val !== undefined ? Number(val) : undefined",
+      fixMapMixed: "Wrap in arrow function with strict checks",
     },
     schema: [],
   },
@@ -74,20 +78,17 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
         ) {
           const argument = node.arguments[0];
 
-          // 1. Literal 'null' Check (No Fix)
+          // 1. Literal/Identifier Exclusions (No Fix)
           if (argument.type === AST_NODE_TYPES.Literal && argument.value === null) {
             context.report({ node: argument, messageId: "unsafeConversion" });
             return;
           }
-
-          // 2. Identifier 'undefined' Check (No Fix)
-          // undefined is technically an identifier, not a literal
           if (argument.type === AST_NODE_TYPES.Identifier && argument.name === "undefined") {
             context.report({ node: argument, messageId: "unsafeConversion" });
             return;
           }
 
-          // 3. Variable Check
+          // 2. Variable Check
           const tsNode = services.esTreeNodeToTSNodeMap.get(argument);
           const type = checker.getTypeAtLocation(tsNode);
           const { hasNull, hasUndefined } = getNullableFlags(type, checker);
@@ -134,69 +135,83 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
               suggest: suggestions.length > 0 ? suggestions : undefined,
             });
           }
+          // Stop here if it was a direct Number() call
+          return;
         }
 
         // ------------------------------------------------------
-        // SCENARIO B: Callback usage -> arr.map(Number)
+        // SCENARIO B: Generic Callback Usage
+        // Handles: arr.map(Number), Promise.then(Number), func(Number), Array.from(x, Number)
         // ------------------------------------------------------
-        node.arguments.forEach((arg) => {
-          if (arg.type === AST_NODE_TYPES.Identifier && arg.name === "Number") {
-            if (
-              node.callee.type === AST_NODE_TYPES.MemberExpression &&
-              node.callee.property.type === AST_NODE_TYPES.Identifier &&
-              node.callee.property.name === "map"
-            ) {
-              const arrayNode = services.esTreeNodeToTSNodeMap.get(node.callee.object);
-              const arrayType = checker.getTypeAtLocation(arrayNode);
-              let elementType: ts.Type | undefined;
+        const tsCallNode = services.esTreeNodeToTSNodeMap.get(node);
+        const resolvedSignature = checker.getResolvedSignature(tsCallNode);
 
-              // Handle Array<T> or T[]
-              if ((arrayType as any).typeArguments && (arrayType as any).typeArguments.length > 0) {
-                elementType = (arrayType as any).typeArguments[0];
-              } else if (arrayType.getNumberIndexType()) {
-                elementType = arrayType.getNumberIndexType();
-              }
+        if (!resolvedSignature) return;
 
-              if (elementType) {
-                const { hasNull, hasUndefined } = getNullableFlags(elementType, checker);
+        node.arguments.forEach((arg, index) => {
+          // We only care if the argument is specifically "Number"
+          if (arg.type !== AST_NODE_TYPES.Identifier || arg.name !== "Number") {
+            return;
+          }
 
-                if (hasNull || hasUndefined) {
-                  const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
+          // 1. Find which parameter of the function definition matches this argument
+          if (index >= resolvedSignature.parameters.length) return;
 
-                  if (hasNull && hasUndefined) {
-                    suggestions.push({
-                      messageId: "fixMapMixed",
-                      fix: (fixer) =>
-                        fixer.replaceText(
-                          arg,
-                          `val => val !== null && val !== undefined ? Number(val) : val`
-                        ),
-                    });
-                  } else if (hasNull) {
-                    suggestions.push({
-                      messageId: "fixMapStrictNull",
-                      fix: (fixer) =>
-                        fixer.replaceText(arg, `val => val !== null ? Number(val) : null`),
-                    });
-                  } else if (hasUndefined) {
-                    suggestions.push({
-                      messageId: "fixMapStrictUndefined",
-                      fix: (fixer) =>
-                        fixer.replaceText(
-                          arg,
-                          `val => val !== undefined ? Number(val) : undefined`
-                        ),
-                    });
-                  }
+          const paramSymbol = resolvedSignature.parameters[index];
+          if (!paramSymbol) return;
 
-                  context.report({
-                    node: arg,
-                    messageId: "unsafeCallback",
-                    suggest: suggestions.length > 0 ? suggestions : undefined,
-                  });
-                }
-              }
+          // 2. Get the type of that parameter (Example: (val: string | null) => number)
+          const paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, tsCallNode);
+
+          // 3. Get the Call Signatures of that callback
+          // FIX: Promise.then's callback is optional (Function | undefined).
+          // We must get the NonNullable type to access the signatures of the Function part.
+          const actualParamType = paramType.getNonNullableType();
+          const callSignatures = actualParamType.getCallSignatures();
+
+          if (callSignatures.length === 0) return;
+
+          const callbackSignature = callSignatures[0];
+
+          // 4. Look at the FIRST parameter of the callback (that's what Number will receive)
+          if (callbackSignature.parameters.length === 0) return;
+
+          const firstParamSymbol = callbackSignature.parameters[0];
+          const firstParamType = checker.getTypeOfSymbolAtLocation(firstParamSymbol, tsCallNode);
+
+          // 5. Check flags
+          const { hasNull, hasUndefined } = getNullableFlags(firstParamType, checker);
+
+          if (hasNull || hasUndefined) {
+            const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
+
+            if (hasNull && hasUndefined) {
+              suggestions.push({
+                messageId: "fixMapMixed",
+                fix: (fixer) =>
+                  fixer.replaceText(
+                    arg,
+                    `val => val !== null && val !== undefined ? Number(val) : val`
+                  ),
+              });
+            } else if (hasNull) {
+              suggestions.push({
+                messageId: "fixMapStrictNull",
+                fix: (fixer) => fixer.replaceText(arg, `val => val !== null ? Number(val) : null`),
+              });
+            } else if (hasUndefined) {
+              suggestions.push({
+                messageId: "fixMapStrictUndefined",
+                fix: (fixer) =>
+                  fixer.replaceText(arg, `val => val !== undefined ? Number(val) : undefined`),
+              });
             }
+
+            context.report({
+              node: arg,
+              messageId: "unsafeCallback",
+              suggest: suggestions.length > 0 ? suggestions : undefined,
+            });
           }
         });
       },

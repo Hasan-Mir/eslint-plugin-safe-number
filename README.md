@@ -44,9 +44,11 @@ module.exports = {
 
 In JavaScript/TypeScript, passing `null` to the `Number()` constructor results in `0`. This is often a source of subtle bugs in data processing, financial calculations, or optional form fields where "no value" should not be treated as "zero".
 
-```javascript
+```ts
 Number(null); // Result: 0  (Often unexpected)
 Number(undefined); // Result: NaN
+Array.from(["1", null], Number); // Unsafe!
+getMaybeNullValue().then(Number); // Unsafe!
 ```
 
 Below is a clean, structured **README section** you can copy-paste directly:
@@ -55,7 +57,7 @@ Below is a clean, structured **README section** you can copy-paste directly:
 
 ## 🔍 Rule Behavior & Auto-Fixes
 
-This rule analyzes the **TypeScript type** of the value being passed to `Number()` and offers **Suggestions (Quick Fixes)** depending on the exact nullability of the value.
+The `no-unsafe-number-conversion` rule analyzes the **TypeScript type** of the value being passed to `Number()` and offers **Suggestions (Quick Fixes)** depending on the exact nullability of the value.
 The goal is to prevent unsafe numeric conversions such as `Number(null)` or `Number(undefined)`.
 
 ### **1. Strict Null (`T | null`)**
