@@ -1,6 +1,6 @@
 {
   "name": "eslint-plugin-safe-number",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "ESLint rule to prevent unsafe Number conversions",
   "author": "Hasan Mir",
   "license": "MIT",
