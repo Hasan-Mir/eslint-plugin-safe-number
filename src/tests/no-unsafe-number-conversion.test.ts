@@ -19,38 +19,155 @@ const ruleTester = new RuleTester({
 
 ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
   valid: [
-    {
-      code: `
-        const val = "123";
-        Number(val);
-      `,
-    },
-    {
-      code: `
-        const val: number = 10;
-        Number(val);
-      `,
-    },
+    { code: `Number(10);` },
+    { code: `Number("10");` },
+    { code: `const arr: string[] = ["1", "2"]; arr.map(Number);` },
   ],
   invalid: [
+    // 1. Literal Null (No Fix)
     {
       code: `Number(null);`,
-      errors: [{ messageId: "unsafeConversion" }],
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
     },
+
+    // 2. Literal Null (No Fix)
+    {
+      code: `Number(undefined);`,
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
+    },
+
+    // 3. Strict Null Variable
     {
       code: `
         const val: string | null = null;
         Number(val);
       `,
-      errors: [{ messageId: "unsafeConversion" }],
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixStrictNull",
+              // ADDED MISSING OUTPUT HERE
+              output: `
+        const val: string | null = null;
+        val !== null ? Number(val) : null;
+      `,
+            },
+          ],
+        },
+      ],
     },
+
+    // 4. Strict Undefined Variable
     {
       code: `
-        function convert(val: number | null) {
-          return Number(val);
-        }
+        const val: string | undefined = undefined;
+        Number(val);
       `,
-      errors: [{ messageId: "unsafeConversion" }],
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixStrictUndefined",
+              // ADDED MISSING OUTPUT HERE
+              output: `
+        const val: string | undefined = undefined;
+        val !== undefined ? Number(val) : undefined;
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 5. Mixed (Null | Undefined)
+    {
+      code: `
+        declare const val: string | null | undefined;
+        Number(val);
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixMixed",
+              output: `
+        declare const val: string | null | undefined;
+        val !== null && val !== undefined ? Number(val) : val;
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 6. Map with Strict Null
+    {
+      code: `
+        const arr: (string | null)[] = ["1", null];
+        arr.map(Number);
+      `,
+      errors: [
+        {
+          messageId: "unsafeCallback",
+          suggestions: [
+            {
+              messageId: "fixMapStrictNull",
+              output: `
+        const arr: (string | null)[] = ["1", null];
+        arr.map(val => val !== null ? Number(val) : null);
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 7. Map with Strict Undefined
+    {
+      code: `
+        const arr: (string | undefined)[] = ["1", undefined];
+        arr.map(Number);
+      `,
+      errors: [
+        {
+          messageId: "unsafeCallback",
+          suggestions: [
+            {
+              messageId: "fixMapStrictUndefined",
+              output: `
+        const arr: (string | undefined)[] = ["1", undefined];
+        arr.map(val => val !== undefined ? Number(val) : undefined);
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 8. Map with Mixed (Null & Undefined)
+    {
+      code: `
+        declare const arr: (string | null | undefined)[];
+        arr.map(Number);
+      `,
+      errors: [
+        {
+          messageId: "unsafeCallback",
+          suggestions: [
+            {
+              messageId: "fixMapMixed",
+              output: `
+        declare const arr: (string | null | undefined)[];
+        arr.map(val => val !== null && val !== undefined ? Number(val) : val);
+      `,
+            },
+          ],
+        },
+      ],
     },
   ],
 });
