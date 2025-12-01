@@ -38,8 +38,6 @@ module.exports = {
 };
 ```
 
----
-
 ## ❌ The Problem
 
 In JavaScript/TypeScript, passing `null` to the `Number()` constructor results in `0`. This is often a source of subtle bugs in data processing, financial calculations, or optional form fields where "no value" should not be treated as "zero".
@@ -50,10 +48,6 @@ Number(undefined); // Result: NaN
 Array.from(["1", null], Number); // Unsafe!
 getMaybeNullValue().then(Number); // Unsafe!
 ```
-
-Below is a clean, structured **README section** you can copy-paste directly:
-
----
 
 ## 🔍 Rule Behavior & Auto-Fixes
 
