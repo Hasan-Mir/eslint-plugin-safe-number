@@ -143,5 +143,109 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
         },
       ],
     },
+
+    // 6. ChainExpression and CallExpression (x?.at(0))
+    {
+      code: `
+        const x = [] as string[] | undefined;
+        Number(x?.at(0));
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixStrictUndefined",
+              output: `
+        const x = [] as string[] | undefined;
+        x?.at(0) !== undefined ? Number(x?.[0]) : undefined;
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 7. MemberExpression (x[0])
+    {
+      code: `
+        const x = [null] as (string | null)[];
+        Number(x[0]);
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixStrictNull",
+              output: `
+        const x = [null] as (string | null)[];
+        x[0] !== null ? Number(x[0]) : null;
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 8. Optional MemberExpression (x?.[0])
+    {
+      code: `
+        const x = [] as string[] | undefined;
+        Number(x?.[0]);
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixStrictUndefined",
+              output: `
+        const x = [] as string[] | undefined;
+        x?.[0] !== undefined ? Number(x?.[0]) : undefined;
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 9. Function Call (f())
+    // EXPECTATION: No fix (still unsafe)
+    {
+      code: `
+        const f = () => 2 as number | null;
+        Number(f());
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: undefined,
+        },
+      ],
+    },
+
+    // 10. Standard .at() Call (x.at(0))
+    // FIX: Expect x[0] inside Number()
+    {
+      code: `
+        const x = [] as (string | null)[];
+        Number(x.at(0));
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixMixed",
+              output: `
+        const x = [] as (string | null)[];
+        x.at(0) !== null && x.at(0) !== undefined ? Number(x[0]) : x.at(0);
+      `,
+            },
+          ],
+        },
+      ],
+    },
   ],
 });

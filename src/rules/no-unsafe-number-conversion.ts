@@ -1,4 +1,4 @@
-import { AST_NODE_TYPES, ESLintUtils, TSESLint } from "@typescript-eslint/utils";
+import { AST_NODE_TYPES, ESLintUtils, TSESLint, TSESTree } from "@typescript-eslint/utils";
 import ts from "typescript";
 
 type MessageIds =
@@ -34,6 +34,60 @@ function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
   }
 
   return { hasNull, hasUndefined };
+}
+
+/**
+ * Checks if a node is a call to .at().
+ * Handles: x.at(0) AND x?.at(0)
+ */
+function isSafeAtMethod(node: TSESTree.Node): boolean {
+  if (node.type === AST_NODE_TYPES.ChainExpression) {
+    return isSafeAtMethod(node.expression);
+  }
+
+  if (node.type === AST_NODE_TYPES.CallExpression) {
+    if (
+      node.callee.type === AST_NODE_TYPES.MemberExpression &&
+      node.callee.property.type === AST_NODE_TYPES.Identifier &&
+      node.callee.property.name === "at"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Generates the text for the argument inside Number().
+ * If it detects .at(0), it converts it to [0].
+ * If the call was optional (x?.at(0)), it converts to optional access (x?.[0]).
+ */
+function getConvertArgument(node: TSESTree.Node, sourceCode: TSESLint.SourceCode): string {
+  let target = node;
+  if (target.type === AST_NODE_TYPES.ChainExpression) {
+    target = target.expression;
+  }
+
+  if (
+    target.type === AST_NODE_TYPES.CallExpression &&
+    target.callee.type === AST_NODE_TYPES.MemberExpression &&
+    target.callee.property.type === AST_NODE_TYPES.Identifier &&
+    target.callee.property.name === "at" &&
+    target.arguments.length === 1 &&
+    target.arguments[0].type === AST_NODE_TYPES.Literal &&
+    target.arguments[0].value === 0
+  ) {
+    const objectText = sourceCode.getText(target.callee.object);
+
+    // Use optional bracket access if the original call was optional (x?.at(0) -> x?.[0])
+    if (target.callee.optional) {
+      return `${objectText}?.[0]`;
+    }
+
+    return `${objectText}[0]`;
+  }
+
+  return sourceCode.getText(node);
 }
 
 export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
@@ -95,9 +149,14 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
 
           if (hasNull || hasUndefined) {
             const argText = sourceCode.getText(argument);
+            const convertText = getConvertArgument(argument, sourceCode);
+
             const isSafeToDuplicate =
               argument.type === AST_NODE_TYPES.Identifier ||
-              argument.type === AST_NODE_TYPES.MemberExpression;
+              argument.type === AST_NODE_TYPES.MemberExpression ||
+              (argument.type === AST_NODE_TYPES.ChainExpression &&
+                argument.expression.type === AST_NODE_TYPES.MemberExpression) ||
+              isSafeAtMethod(argument);
 
             const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
 
@@ -108,14 +167,14 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                   fix: (fixer) =>
                     fixer.replaceText(
                       node,
-                      `${argText} !== null && ${argText} !== undefined ? Number(${argText}) : ${argText}`
+                      `${argText} !== null && ${argText} !== undefined ? Number(${convertText}) : ${argText}`
                     ),
                 });
               } else if (hasNull) {
                 suggestions.push({
                   messageId: "fixStrictNull",
                   fix: (fixer) =>
-                    fixer.replaceText(node, `${argText} !== null ? Number(${argText}) : null`),
+                    fixer.replaceText(node, `${argText} !== null ? Number(${convertText}) : null`),
                 });
               } else if (hasUndefined) {
                 suggestions.push({
@@ -123,7 +182,7 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                   fix: (fixer) =>
                     fixer.replaceText(
                       node,
-                      `${argText} !== undefined ? Number(${argText}) : undefined`
+                      `${argText} !== undefined ? Number(${convertText}) : undefined`
                     ),
                 });
               }
