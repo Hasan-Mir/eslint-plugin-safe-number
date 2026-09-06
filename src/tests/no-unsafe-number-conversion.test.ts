@@ -24,6 +24,8 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
     { code: `const arr: string[] = ["1", "2"]; arr.map(Number);` },
     // Safe Promise
     { code: `Promise.resolve("1").then(Number);` },
+    // Safe numeric string literal union
+    { code: `declare const val: "10" | "20"; Number(val);` },
   ],
   invalid: [
     // 1. Direct Calls (Sanity check)
@@ -246,6 +248,74 @@ ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
           ],
         },
       ],
+    },
+
+    // 11. Literal Non-Numeric Strings (No Fix)
+    {
+      code: `Number("nt");`,
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
+    },
+    {
+      code: `Number("");`,
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
+    },
+
+    // 12. Non-numeric String Union (No Fix)
+    {
+      code: `
+        declare const val: number | "nt";
+        Number(val);
+      `,
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
+    },
+
+    // 13. Nullable Non-numeric String Union (No Fix to prevent NaN bug)
+    {
+      code: `
+        declare const val: number | "nt" | null;
+        Number(val);
+      `,
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
+    },
+
+    // 14. Callback with Non-numeric String Union (No Fix)
+    {
+      code: `
+        const arr: (number | "nt" | null)[] = [1, "nt", null];
+        arr.map(Number);
+      `,
+      errors: [{ messageId: "unsafeCallback", suggestions: undefined }],
+    },
+
+    // 15. Nullable with Valid Numeric String Literal (Fix Expected)
+    {
+      code: `
+        declare const val: null | number | "5.6";
+        Number(val);
+      `,
+      errors: [
+        {
+          messageId: "unsafeConversion",
+          suggestions: [
+            {
+              messageId: "fixStrictNull",
+              output: `
+        declare const val: null | number | "5.6";
+        val !== null ? Number(val) : null;
+      `,
+            },
+          ],
+        },
+      ],
+    },
+
+    // 16. Arrow Function Parameter with Non-numeric String Union (No Fix)
+    {
+      code: `
+        declare const arr: (number | "nt" | null)[];
+        arr.map(val => Number(val));
+      `,
+      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
     },
   ],
 });

@@ -14,26 +14,54 @@ type MessageIds =
 type Options = [];
 
 const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://github.com/Hasan-Mir/eslint-plugin-safe-number/blob/main/src/rules/${name}.ts`
+  (name) => `https://github.com/Hasan-Mir/eslint-plugin-safe-number/blob/main/src/rules/${name}.ts`,
 );
+
+function isNonNumericStringLiteral(type: ts.Type): boolean {
+  if (type.isStringLiteral()) {
+    const val = type.value;
+    if (val.trim() === "" || Number.isNaN(Number(val))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
   let hasNull = false;
   let hasUndefined = false;
+  let hasInvalidString = false;
 
-  if (type.getFlags() & ts.TypeFlags.Null) hasNull = true;
-  if (type.getFlags() & ts.TypeFlags.Undefined) hasUndefined = true;
-  if (type.getFlags() & ts.TypeFlags.Void) hasUndefined = true;
-
-  if (type.isUnion()) {
-    for (const t of type.types) {
-      const flags = getNullableFlags(t, checker);
-      if (flags.hasNull) hasNull = true;
-      if (flags.hasUndefined) hasUndefined = true;
+  function checkType(t: ts.Type): void {
+    if ((t.getFlags() & ts.TypeFlags.Null) !== 0) {
+      hasNull = true;
+      return;
+    }
+    if ((t.getFlags() & ts.TypeFlags.Undefined) !== 0 || (t.getFlags() & ts.TypeFlags.Void) !== 0) {
+      hasUndefined = true;
+      return;
+    }
+    if (isNonNumericStringLiteral(t)) {
+      hasInvalidString = true;
+      return;
+    }
+    if (t.isUnion()) {
+      for (const subType of t.types) {
+        checkType(subType);
+      }
+      return;
+    }
+    if (t.isIntersection()) {
+      for (const subType of t.types) {
+        checkType(subType);
+      }
+      return;
     }
   }
 
-  return { hasNull, hasUndefined };
+  checkType(type);
+
+  return { hasNull, hasUndefined, hasInvalidString };
 }
 
 /**
@@ -95,13 +123,14 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
   meta: {
     type: "problem",
     docs: {
-      description: "Disallow converting null/undefined values to Number",
+      description: "Disallow converting null/undefined or non-numeric string values to Number",
     },
     hasSuggestions: true,
     messages: {
-      unsafeConversion: "Unsafe conversion to Number(). The value might be null or undefined.",
+      unsafeConversion:
+        "Unsafe conversion to Number(). The value might be null, undefined, or a non-numeric string.",
       unsafeCallback:
-        'Unsafe passing of "Number" as callback. The input to the callback may be null/undefined.',
+        'Unsafe passing of "Number" as callback. The input to the callback may be null, undefined, or a non-numeric string.',
       // Direct Fixes
       fixStrictNull: "Guard with null check: val !== null ? Number(val) : null",
       fixStrictUndefined: "Guard with undefined check: val !== undefined ? Number(val) : undefined",
@@ -141,13 +170,21 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
             context.report({ node: argument, messageId: "unsafeConversion" });
             return;
           }
+          if (
+            argument.type === AST_NODE_TYPES.Literal &&
+            typeof argument.value === "string" &&
+            (argument.value.trim() === "" || Number.isNaN(Number(argument.value)))
+          ) {
+            context.report({ node: argument, messageId: "unsafeConversion" });
+            return;
+          }
 
           // 2. Variable Check
           const tsNode = services.esTreeNodeToTSNodeMap.get(argument);
           const type = checker.getTypeAtLocation(tsNode);
-          const { hasNull, hasUndefined } = getNullableFlags(type, checker);
+          const { hasNull, hasUndefined, hasInvalidString } = getNullableFlags(type, checker);
 
-          if (hasNull || hasUndefined) {
+          if (hasNull || hasUndefined || hasInvalidString) {
             const argText = sourceCode.getText(argument);
             const convertText = getConvertArgument(argument, sourceCode);
 
@@ -160,14 +197,14 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
 
             const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
 
-            if (isSafeToDuplicate) {
+            if (isSafeToDuplicate && !hasInvalidString) {
               if (hasNull && hasUndefined) {
                 suggestions.push({
                   messageId: "fixMixed",
                   fix: (fixer) =>
                     fixer.replaceText(
                       node,
-                      `${argText} !== null && ${argText} !== undefined ? Number(${convertText}) : ${argText}`
+                      `${argText} !== null && ${argText} !== undefined ? Number(${convertText}) : ${argText}`,
                     ),
                 });
               } else if (hasNull) {
@@ -182,7 +219,7 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                   fix: (fixer) =>
                     fixer.replaceText(
                       node,
-                      `${argText} !== undefined ? Number(${convertText}) : undefined`
+                      `${argText} !== undefined ? Number(${convertText}) : undefined`,
                     ),
                 });
               }
@@ -205,7 +242,9 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
         const tsCallNode = services.esTreeNodeToTSNodeMap.get(node);
         const resolvedSignature = checker.getResolvedSignature(tsCallNode);
 
-        if (!resolvedSignature) return;
+        if (!resolvedSignature) {
+          return;
+        }
 
         node.arguments.forEach((arg, index) => {
           // We only care if the argument is specifically "Number"
@@ -214,10 +253,14 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
           }
 
           // 1. Find which parameter of the function definition matches this argument
-          if (index >= resolvedSignature.parameters.length) return;
+          if (index >= resolvedSignature.parameters.length) {
+            return;
+          }
 
           const paramSymbol = resolvedSignature.parameters[index];
-          if (!paramSymbol) return;
+          if (!paramSymbol) {
+            return;
+          }
 
           // 2. Get the type of that parameter (Example: (val: string | null) => number)
           const paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, tsCallNode);
@@ -228,42 +271,52 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
           const actualParamType = paramType.getNonNullableType();
           const callSignatures = actualParamType.getCallSignatures();
 
-          if (callSignatures.length === 0) return;
+          if (callSignatures.length === 0) {
+            return;
+          }
 
           const callbackSignature = callSignatures[0];
 
           // 4. Look at the FIRST parameter of the callback (that's what Number will receive)
-          if (callbackSignature.parameters.length === 0) return;
+          if (callbackSignature.parameters.length === 0) {
+            return;
+          }
 
           const firstParamSymbol = callbackSignature.parameters[0];
           const firstParamType = checker.getTypeOfSymbolAtLocation(firstParamSymbol, tsCallNode);
 
           // 5. Check flags
-          const { hasNull, hasUndefined } = getNullableFlags(firstParamType, checker);
+          const { hasNull, hasUndefined, hasInvalidString } = getNullableFlags(
+            firstParamType,
+            checker,
+          );
 
-          if (hasNull || hasUndefined) {
+          if (hasNull || hasUndefined || hasInvalidString) {
             const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
 
-            if (hasNull && hasUndefined) {
-              suggestions.push({
-                messageId: "fixMapMixed",
-                fix: (fixer) =>
-                  fixer.replaceText(
-                    arg,
-                    `val => val !== null && val !== undefined ? Number(val) : val`
-                  ),
-              });
-            } else if (hasNull) {
-              suggestions.push({
-                messageId: "fixMapStrictNull",
-                fix: (fixer) => fixer.replaceText(arg, `val => val !== null ? Number(val) : null`),
-              });
-            } else if (hasUndefined) {
-              suggestions.push({
-                messageId: "fixMapStrictUndefined",
-                fix: (fixer) =>
-                  fixer.replaceText(arg, `val => val !== undefined ? Number(val) : undefined`),
-              });
+            if (!hasInvalidString) {
+              if (hasNull && hasUndefined) {
+                suggestions.push({
+                  messageId: "fixMapMixed",
+                  fix: (fixer) =>
+                    fixer.replaceText(
+                      arg,
+                      `val => val !== null && val !== undefined ? Number(val) : val`,
+                    ),
+                });
+              } else if (hasNull) {
+                suggestions.push({
+                  messageId: "fixMapStrictNull",
+                  fix: (fixer) =>
+                    fixer.replaceText(arg, `val => val !== null ? Number(val) : null`),
+                });
+              } else if (hasUndefined) {
+                suggestions.push({
+                  messageId: "fixMapStrictUndefined",
+                  fix: (fixer) =>
+                    fixer.replaceText(arg, `val => val !== undefined ? Number(val) : undefined`),
+                });
+              }
             }
 
             context.report({
