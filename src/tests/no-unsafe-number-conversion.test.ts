@@ -1,321 +1,393 @@
-import { RuleTester } from "@typescript-eslint/rule-tester";
-import { noUnsafeNumberConversion } from "../rules/no-unsafe-number-conversion";
-import * as path from "path";
+import { RuleTester } from '@typescript-eslint/rule-tester';
+import { noUnsafeNumberConversion } from '../rules/no-unsafe-number-conversion';
+import * as path from 'path';
 
 const ruleTester = new RuleTester({
-  languageOptions: {
-    parserOptions: {
-      // 1. Tell the parser to look for a tsconfig.json
-      projectService: {
-        allowDefaultProject: ["*.ts*"],
-        defaultProject: "tsconfig.json",
-      },
-      // 2. IMPORTANT: Point to the ROOT directory where tsconfig.json lives
-      // Since this test file is in src/tests/, we go up two levels to find root
-      tsconfigRootDir: path.join(__dirname, "../../"),
+    languageOptions: {
+        parserOptions: {
+            // 1. Tell the parser to look for a tsconfig.json
+            projectService: {
+                allowDefaultProject: ['*.ts*'],
+                defaultProject: 'tsconfig.json',
+            },
+            // 2. IMPORTANT: Point to the ROOT directory where tsconfig.json lives
+            // Since this test file is in src/tests/, we go up two levels to find root
+            tsconfigRootDir: path.join(__dirname, '../../'),
+        },
     },
-  },
 });
 
-ruleTester.run("no-unsafe-number-conversion", noUnsafeNumberConversion, {
-  valid: [
-    { code: `Number(10);` },
-    { code: `Number("10");` },
-    { code: `const arr: string[] = ["1", "2"]; arr.map(Number);` },
-    // Safe Promise
-    { code: `Promise.resolve("1").then(Number);` },
-    // Safe numeric string literal union
-    { code: `declare const val: "10" | "20"; Number(val);` },
-  ],
-  invalid: [
-    // 1. Direct Calls (Sanity check)
-    {
-      code: `Number(null);`,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
-    {
-      code: `
+ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
+    valid: [
+        { code: `Number(10);` },
+        { code: `Number("10");` },
+        { code: `const arr: string[] = ["1", "2"]; arr.map(Number);` },
+        // Safe Promise
+        { code: `Promise.resolve("1").then(Number);` },
+        // Safe numeric string literal union
+        { code: `declare const val: "10" | "20"; Number(val);` },
+        // Safe intersection type stripping null
+        {
+            code: `type NonNullableString = (string | null) & {}; declare const val: NonNullableString; Number(val);`,
+        },
+        // Shadowed local Number function should not be flagged
+        {
+            code: `
+        function customFormat(Number: (x: string | null) => number, val: string | null) {
+          return Number(val);
+        }
+      `,
+        },
+    ],
+    invalid: [
+        // 1. Direct Calls (Sanity check)
+        {
+            code: `Number(null);`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+        {
+            code: `
         const val: string | null = null;
         Number(val);
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixStrictNull",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictNull',
+                            output: `
         const val: string | null = null;
-        val !== null ? Number(val) : null;
+        (val !== null ? Number(val) : null);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 2. Array.map (Generic Check)
-    {
-      code: `
+        // 2. Array.map (Generic Check)
+        {
+            code: `
         const arr: (string | null)[] = ["1", null];
         arr.map(Number);
       `,
-      errors: [
-        {
-          messageId: "unsafeCallback",
-          suggestions: [
-            {
-              messageId: "fixMapStrictNull",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
         const arr: (string | null)[] = ["1", null];
         arr.map(val => val !== null ? Number(val) : null);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 3. Array.from (Generic Check - 2nd Argument)
-    {
-      code: `
+        // 3. Array.from (Generic Check - 2nd Argument)
+        {
+            code: `
         const set = new Set<string | undefined>(["1", undefined]);
         Array.from(set, Number);
       `,
-      errors: [
-        {
-          messageId: "unsafeCallback",
-          suggestions: [
-            {
-              messageId: "fixMapStrictUndefined",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictUndefined',
+                            output: `
         const set = new Set<string | undefined>(["1", undefined]);
         Array.from(set, val => val !== undefined ? Number(val) : undefined);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 4. Promise.then (Generic Check)
-    {
-      code: `
+        // 4. Promise.then (Generic Check)
+        {
+            code: `
         declare const p: Promise<string | null>;
         p.then(Number);
       `,
-      errors: [
-        {
-          messageId: "unsafeCallback",
-          suggestions: [
-            {
-              messageId: "fixMapStrictNull",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
         declare const p: Promise<string | null>;
         p.then(val => val !== null ? Number(val) : null);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 5. Custom Function (Generic Check)
-    {
-      code: `
+        // 5. Custom Function (Generic Check)
+        {
+            code: `
         function process(converter: (input: string | null | undefined) => number) {
            return converter("test");
         }
         process(Number);
       `,
-      errors: [
-        {
-          messageId: "unsafeCallback",
-          suggestions: [
-            {
-              messageId: "fixMapMixed",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapMixed',
+                            output: `
         function process(converter: (input: string | null | undefined) => number) {
            return converter("test");
         }
         process(val => val !== null && val !== undefined ? Number(val) : val);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 6. ChainExpression and CallExpression (x?.at(0))
-    {
-      code: `
+        // 6. ChainExpression and CallExpression (x?.at(0))
+        {
+            code: `
         const x = [] as string[] | undefined;
         Number(x?.at(0));
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixStrictUndefined",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictUndefined',
+                            output: `
         const x = [] as string[] | undefined;
-        x?.at(0) !== undefined ? Number(x?.[0]) : undefined;
+        (x?.at(0) !== undefined ? Number(x?.[0]) : undefined);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 7. MemberExpression (x[0])
-    {
-      code: `
+        // 7. MemberExpression (x[0])
+        {
+            code: `
         const x = [null] as (string | null)[];
         Number(x[0]);
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixStrictNull",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictNull',
+                            output: `
         const x = [null] as (string | null)[];
-        x[0] !== null ? Number(x[0]) : null;
+        (x[0] !== null ? Number(x[0]) : null);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 8. Optional MemberExpression (x?.[0])
-    {
-      code: `
+        // 8. Optional MemberExpression (x?.[0])
+        {
+            code: `
         const x = [] as string[] | undefined;
         Number(x?.[0]);
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixStrictUndefined",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictUndefined',
+                            output: `
         const x = [] as string[] | undefined;
-        x?.[0] !== undefined ? Number(x?.[0]) : undefined;
+        (x?.[0] !== undefined ? Number(x?.[0]) : undefined);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 9. Function Call (f())
-    // EXPECTATION: No fix (still unsafe)
-    {
-      code: `
+        // 9. Function Call (f())
+        // EXPECTATION: No fix (unsafe to duplicate)
+        {
+            code: `
         const f = () => 2 as number | null;
         Number(f());
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: undefined,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: undefined,
+                },
+            ],
         },
-      ],
-    },
 
-    // 10. Standard .at() Call (x.at(0))
-    // FIX: Expect x[0] inside Number()
-    {
-      code: `
+        // 10. Standard .at() Call (x.at(0))
+        // FIX: Expect x[0] inside Number() and parenthesized guard
+        {
+            code: `
         const x = [] as (string | null)[];
         Number(x.at(0));
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixMixed",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixMixed',
+                            output: `
         const x = [] as (string | null)[];
-        x.at(0) !== null && x.at(0) !== undefined ? Number(x[0]) : x.at(0);
+        (x.at(0) !== null && x.at(0) !== undefined ? Number(x[0]) : x.at(0));
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 11. Literal Non-Numeric Strings (No Fix)
-    {
-      code: `Number("nt");`,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
-    {
-      code: `Number("");`,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
+        // 11. Literal Non-Numeric Strings (No Fix)
+        {
+            code: `Number("nt");`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+        {
+            code: `Number("");`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
 
-    // 12. Non-numeric String Union (No Fix)
-    {
-      code: `
+        // 12. Non-numeric String Union (No Fix)
+        {
+            code: `
         declare const val: number | "nt";
         Number(val);
       `,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
 
-    // 13. Nullable Non-numeric String Union (No Fix to prevent NaN bug)
-    {
-      code: `
+        // 13. Nullable Non-numeric String Union (No Fix to prevent NaN bug)
+        {
+            code: `
         declare const val: number | "nt" | null;
         Number(val);
       `,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
 
-    // 14. Callback with Non-numeric String Union (No Fix)
-    {
-      code: `
+        // 14. Callback with Non-numeric String Union (No Fix)
+        {
+            code: `
         const arr: (number | "nt" | null)[] = [1, "nt", null];
         arr.map(Number);
       `,
-      errors: [{ messageId: "unsafeCallback", suggestions: undefined }],
-    },
+            errors: [{ messageId: 'unsafeCallback', suggestions: undefined }],
+        },
 
-    // 15. Nullable with Valid Numeric String Literal (Fix Expected)
-    {
-      code: `
+        // 15. Nullable with Valid Numeric String Literal (Fix Expected with Parentheses)
+        {
+            code: `
         declare const val: null | number | "5.6";
         Number(val);
       `,
-      errors: [
-        {
-          messageId: "unsafeConversion",
-          suggestions: [
-            {
-              messageId: "fixStrictNull",
-              output: `
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictNull',
+                            output: `
         declare const val: null | number | "5.6";
-        val !== null ? Number(val) : null;
+        (val !== null ? Number(val) : null);
       `,
-            },
-          ],
+                        },
+                    ],
+                },
+            ],
         },
-      ],
-    },
 
-    // 16. Arrow Function Parameter with Non-numeric String Union (No Fix)
-    {
-      code: `
+        // 16. Arrow Function Parameter with Non-numeric String Union (No Fix)
+        {
+            code: `
         declare const arr: (number | "nt" | null)[];
         arr.map(val => Number(val));
       `,
-      errors: [{ messageId: "unsafeConversion", suggestions: undefined }],
-    },
-  ],
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 17. Operator Precedence Test (Parenthesized fix prevents syntax/evaluation errors)
+        {
+            code: `
+        declare const val: string | null;
+        const total = 10 + Number(val);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictNull',
+                            output: `
+        declare const val: string | null;
+        const total = 10 + (val !== null ? Number(val) : null);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 18. Constrained Generic Type Parameter
+        {
+            code: `
+        function parse<T extends string | null>(val: T) {
+          return Number(val);
+        }
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictNull',
+                            output: `
+        function parse<T extends string | null>(val: T) {
+          return (val !== null ? Number(val) : null);
+        }
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 19. Impure Member Expressions with Invocations (No Fix)
+        {
+            code: `
+        declare const getter: { fetchValue: () => string | null };
+        Number(getter.fetchValue());
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: undefined,
+                },
+            ],
+        },
+    ],
 });

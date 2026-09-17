@@ -21,20 +21,20 @@ It relies on the TypeScript Type Checker to determine if a variable is nullable.
 
 ```js
 module.exports = {
-  // ...
-  parser: "@typescript-eslint/parser",
-  parserOptions: {
-    ecmaVersion: "latest",
-    sourceType: "module",
-    // ⚠️ CRITICAL: Point to your TSConfig(s) to enable type-aware linting
-    project: ["./packages/*/tsconfig.json", "./tsconfig.json"],
-    tsconfigRootDir: __dirname,
-  },
-  plugins: ["safe-number"],
-  rules: {
-    // ... other rules
-    "safe-number/no-unsafe-number-conversion": "error",
-  },
+    // ...
+    parser: '@typescript-eslint/parser',
+    parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        // ⚠️ CRITICAL: Point to your TSConfig(s) to enable type-aware linting
+        project: ['./packages/*/tsconfig.json', './tsconfig.json'],
+        tsconfigRootDir: __dirname,
+    },
+    plugins: ['safe-number'],
+    rules: {
+        // ... other rules
+        'safe-number/no-unsafe-number-conversion': 'error',
+    },
 };
 ```
 
@@ -45,8 +45,8 @@ In JavaScript/TypeScript, passing `null` to the `Number()` constructor results i
 ```ts
 Number(null); // Result: 0  (Often unexpected)
 Number(undefined); // Result: NaN
-Number("nt"); // Result: NaN (Non-numeric string)
-Array.from(["1", null], Number); // Unsafe!
+Number('nt'); // Result: NaN (Non-numeric string)
+Array.from(['1', null], Number); // Unsafe!
 getMaybeNullValue().then(Number); // Unsafe!
 ```
 
@@ -113,14 +113,14 @@ The rule also detects unsafe conversions in array callbacks such as `map(Number)
 #### ❌ Incorrect
 
 ```ts
-const arr: (string | null)[] = ["1", null];
+const arr: (string | null)[] = ['1', null];
 arr.map(Number);
 ```
 
 #### ✅ Fixed (Suggestion)
 
 ```ts
-arr.map((val) => (val !== null ? Number(val) : null));
+arr.map(val => (val !== null ? Number(val) : null));
 ```
 
 ### **5. Literal Values**
@@ -130,8 +130,8 @@ The rule flags literal unsafe calls:
 ```ts
 Number(null);
 Number(undefined);
-Number("nt");
-Number("");
+Number('nt');
+Number('');
 ```
 
 These are treated as **errors**, but **no auto-fix is offered**, because the logic is ambiguous and should be resolved manually.
@@ -143,7 +143,7 @@ When a variable's type includes non-numeric string literals (e.g. `number | "nt"
 #### ❌ Flagged as Error (No Auto-Fix)
 
 ```ts
-const val: number | "nt" | null = null;
+const val: number | 'nt' | null = null;
 Number(val);
 ```
 
