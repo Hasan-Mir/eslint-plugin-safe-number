@@ -17,23 +17,85 @@ npm install --save-dev eslint-plugin-safe-number
 
 It relies on the TypeScript Type Checker to determine if a variable is nullable. It will **not** work in standard JavaScript projects or without proper `parserOptions`.
 
-### Configuration
+## ⚙️ Configuration
+
+### Flat Config (`eslint.config.js` — ESLint 9+)
+
+```js
+import tsParser from '@typescript-eslint/parser';
+import safeNumberPlugin from 'eslint-plugin-safe-number';
+
+export default [
+    {
+        files: ['**/*.{ts,tsx}'],
+        languageOptions: {
+            parser: tsParser,
+            parserOptions: {
+                // ⚠️ CRITICAL: Enable TypeScript type-aware linting
+                project: true,
+            },
+        },
+        plugins: {
+            'safe-number': safeNumberPlugin,
+        },
+        rules: {
+            'safe-number/no-unsafe-number-conversion': 'error',
+        },
+    },
+];
+```
+
+Or use the recommended flat preset with ESLint's `defineConfig`:
+
+```js
+import { defineConfig } from 'eslint/config';
+import tsParser from '@typescript-eslint/parser';
+import safeNumberPlugin from 'eslint-plugin-safe-number';
+
+export default defineConfig([
+    {
+        files: ['**/*.{ts,tsx}'],
+        languageOptions: {
+            parser: tsParser,
+            parserOptions: {
+                project: true,
+            },
+        },
+        extends: [safeNumberPlugin.configs['flat/recommended']],
+    },
+]);
+```
+
+### Legacy Config (`.eslintrc.js` — ESLint 8 / ESLint 9 legacy mode)
+
+> Legacy `.eslintrc` configuration is supported by ESLint 8 and can be used in ESLint 9 legacy mode. ESLint 10+ supports flat config only.
 
 ```js
 module.exports = {
-    // ...
     parser: '@typescript-eslint/parser',
     parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
-        // ⚠️ CRITICAL: Point to your TSConfig(s) to enable type-aware linting
-        project: ['./packages/*/tsconfig.json', './tsconfig.json'],
+        // ⚠️ CRITICAL: Point to your tsconfig(s) to enable type-aware linting
+        project: ['./tsconfig.json', './packages/*/tsconfig.json'],
         tsconfigRootDir: __dirname,
     },
     plugins: ['safe-number'],
     rules: {
-        // ... other rules
         'safe-number/no-unsafe-number-conversion': 'error',
+    },
+};
+```
+
+Or extend the legacy recommended preset:
+
+```js
+module.exports = {
+    extends: ['plugin:safe-number/recommended'],
+    parser: '@typescript-eslint/parser',
+    parserOptions: {
+        project: ['./tsconfig.json'],
+        tsconfigRootDir: __dirname,
     },
 };
 ```
@@ -69,7 +131,7 @@ Number(val);
 #### ✅ Fixed (Suggestion)
 
 ```ts
-val !== null ? Number(val) : null;
+(val !== null ? Number(val) : null);
 ```
 
 ### **2. Strict Undefined (`T | undefined`)**
@@ -143,9 +205,9 @@ When a variable's type includes non-numeric string literals (e.g. `number | "nt"
 #### ❌ Flagged as Error (No Auto-Fix)
 
 ```ts
-const val: number | 'nt' | null = null;
+declare const val: number | 'nt' | null;
 Number(val);
 ```
 
 **Why is no auto-fix offered?**
-A suggestion like `val !== null ? Number(val) : null` would leave `Number(val)` with type `number | "nt"`. Passing `"nt"` to `Number("nt")` evaluates to `NaN`, introducing a hidden runtime bug. Because handling application-specific sentinel values (like `"nt"`) requires domain-specific business logic, the rule flags the issue without offering an auto-fix so you can resolve it safely and intentionally.
+A suggestion like `(val !== null ? Number(val) : null)` would leave `Number(val)` with type `number | "nt"`. Passing `"nt"` to `Number("nt")` evaluates to `NaN`, introducing a hidden runtime bug. Because handling application-specific sentinel values (like `"nt"`) requires domain-specific business logic, the rule flags the issue without offering an auto-fix so you can resolve it safely and intentionally.

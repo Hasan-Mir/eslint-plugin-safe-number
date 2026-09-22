@@ -39,7 +39,7 @@ function isGlobalNumber(
     const tsNode = services.esTreeNodeToTSNodeMap.get(node);
     const symbol = checker.getSymbolAtLocation(tsNode);
     if (!symbol) {
-        return false;
+        return true;
     }
 
     const actualSymbol =
@@ -50,11 +50,11 @@ function isGlobalNumber(
     }
 
     if (!actualSymbol.declarations || actualSymbol.declarations.length === 0) {
-        return false;
+        return true;
     }
 
     return actualSymbol.declarations.some(decl => {
-        return decl.getSourceFile().hasNoDefaultLib;
+        return decl.getSourceFile().isDeclarationFile;
     });
 }
 
@@ -65,19 +65,30 @@ function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
 
     function checkType(t: ts.Type): void {
         const flags = t.getFlags();
+        const intrinsicName = (t as unknown as { intrinsicName?: string }).intrinsicName;
+        const typeName = checker.typeToString(t);
 
-        if ((flags & ts.TypeFlags.Null) !== 0) {
+        if ((flags & ts.TypeFlags.Null) !== 0 || intrinsicName === 'null' || typeName === 'null') {
             hasNull = true;
             return;
         }
-        if ((flags & ts.TypeFlags.Undefined) !== 0 || (flags & ts.TypeFlags.Void) !== 0) {
+
+        if (
+            (flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !== 0 ||
+            intrinsicName === 'undefined' ||
+            intrinsicName === 'void' ||
+            typeName === 'undefined' ||
+            typeName === 'void'
+        ) {
             hasUndefined = true;
             return;
         }
+
         if (isNonNumericStringLiteral(t)) {
             hasInvalidString = true;
             return;
         }
+
         // Handle generic type parameters (e.g. <T extends string | null>)
         if ((flags & ts.TypeFlags.TypeParameter) !== 0) {
             const constraint = t.getConstraint();
@@ -86,22 +97,22 @@ function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
             }
             return;
         }
+
         // Handle union types
-        if ((flags & ts.TypeFlags.Union) !== 0) {
-            const unionType = t as ts.UnionType;
-            for (const subType of unionType.types) {
+        if (t.isUnion()) {
+            for (const subType of t.types) {
                 checkType(subType);
             }
             return;
         }
+
         // Intersections require all constituents to allow null/undefined (e.g. (string | null) & {})
-        if ((flags & ts.TypeFlags.Intersection) !== 0) {
-            const intersectionType = t as ts.IntersectionType;
+        if (t.isIntersection()) {
             let allowsNull = true;
             let allowsUndefined = true;
             let intersectionHasInvalidString = false;
 
-            for (const subType of intersectionType.types) {
+            for (const subType of t.types) {
                 const subFlags = getNullableFlags(subType, checker);
                 if (!subFlags.hasNull) {
                     allowsNull = false;

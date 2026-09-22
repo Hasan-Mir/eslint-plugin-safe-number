@@ -1,21 +1,5 @@
-import { RuleTester } from '@typescript-eslint/rule-tester';
-import { noUnsafeNumberConversion } from '../rules/no-unsafe-number-conversion';
-import * as path from 'path';
-
-const ruleTester = new RuleTester({
-    languageOptions: {
-        parserOptions: {
-            // 1. Tell the parser to look for a tsconfig.json
-            projectService: {
-                allowDefaultProject: ['*.ts*'],
-                defaultProject: 'tsconfig.json',
-            },
-            // 2. IMPORTANT: Point to the ROOT directory where tsconfig.json lives
-            // Since this test file is in src/tests/, we go up two levels to find root
-            tsconfigRootDir: path.join(__dirname, '../../'),
-        },
-    },
-});
+import { noUnsafeNumberConversion } from '../src/rules/no-unsafe-number-conversion';
+import { ruleTester } from './utils/rule-testers';
 
 ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
     valid: [
@@ -388,6 +372,90 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
                     suggestions: undefined,
                 },
             ],
+        },
+
+        // 20. Variable with literal undefined value
+        {
+            code: `
+        const a = undefined;
+        Number(a);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictUndefined',
+                            output: `
+        const a = undefined;
+        (a !== undefined ? Number(a) : undefined);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 21. Union of number and undefined (conditional initialization)
+        {
+            code: `
+        const x3: number | undefined = Math.random() > 0.5 ? 1 : undefined;
+        Number(x3);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictUndefined',
+                            output: `
+        const x3: number | undefined = Math.random() > 0.5 ? 1 : undefined;
+        (x3 !== undefined ? Number(x3) : undefined);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 22. Explicit undefined type annotation
+        {
+            code: `
+        declare const val: undefined;
+        Number(val);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeConversion',
+                    suggestions: [
+                        {
+                            messageId: 'fixStrictUndefined',
+                            output: `
+        declare const val: undefined;
+        (val !== undefined ? Number(val) : undefined);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 23. Direct Number(undefined) Literal Exclusion (No Fix)
+        {
+            code: `Number(undefined);`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 24. Unary void expression (void 0 evaluates to undefined)
+        {
+            code: `Number(void 0);`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 25. NaN string literal
+        {
+            code: `Number("NaN");`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
         },
     ],
 });

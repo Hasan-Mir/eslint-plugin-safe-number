@@ -24,6 +24,6 @@
         // Allows you to use modern JS features inside the rule
         "allowJs": false
     },
-    "include": ["src/**/*.ts", "tests/**/*.ts"],
+    "include": ["src/**/*.ts"],
     "exclude": ["dist", "node_modules"]
 }
