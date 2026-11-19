@@ -13,9 +13,9 @@ npm install --save-dev eslint-plugin-safe-number
 
 ## ⚠️ Requirements
 
-**This plugin works ONLY in TypeScript projects.**
+**This plugin works ONLY in TypeScript projects with `strictNullChecks` enabled.**
 
-It relies on the TypeScript Type Checker to determine if a variable is nullable. It will **not** work in standard JavaScript projects or without proper `parserOptions`.
+It relies on the TypeScript Type Checker to determine if a variable is nullable. Make sure your `tsconfig.json` has `"strict": true` or `"strictNullChecks": true`, and configure `@typescript-eslint/parser` with `parserOptions.project` (or `projectService`). Without `strictNullChecks`, TypeScript strips `null` and `undefined` from union types and this rule will not detect nullable variables.
 
 ## ⚙️ Configuration
 
@@ -112,9 +112,9 @@ Array.from(['1', null], Number); // Unsafe!
 getMaybeNullValue().then(Number); // Unsafe!
 ```
 
-## 🔍 Rule Behavior & Auto-Fixes
+## 🔍 Rule Behavior & Suggestions
 
-The `no-unsafe-number-conversion` rule analyzes the **TypeScript type** of the value being passed to `Number()` and offers **Suggestions (Quick Fixes)** depending on the exact nullability of the value.
+The `no-unsafe-number-conversion` rule analyzes the **TypeScript type** of the value being passed to `Number()` and offers **Suggestions (Quick Fixes)** depending on the exact nullability of the value (not `--fix` auto-fixes).
 The goal is to prevent unsafe numeric conversions such as `Number(null)`, `Number(undefined)`, or `Number("nt")`.
 
 ### **1. Strict Null (`T | null`)**
@@ -148,7 +148,7 @@ Number(val);
 #### ✅ Fixed (Suggestion)
 
 ```ts
-val !== undefined ? Number(val) : undefined;
+(val !== undefined ? Number(val) : undefined);
 ```
 
 ### **3. Mixed Types (`T | null | undefined`)**
@@ -165,7 +165,7 @@ Number(val);
 #### ✅ Fixed (Suggestion)
 
 ```ts
-val !== null && val !== undefined ? Number(val) : val;
+(val !== null && val !== undefined ? Number(val) : val);
 ```
 
 ### **4. Array Callbacks (`.map`, `.forEach`, etc.)**
@@ -182,7 +182,7 @@ arr.map(Number);
 #### ✅ Fixed (Suggestion)
 
 ```ts
-arr.map(val => (val !== null ? Number(val) : null));
+arr.map(val => val !== null ? Number(val) : null);
 ```
 
 ### **5. Literal Values**
@@ -196,18 +196,18 @@ Number('nt');
 Number('');
 ```
 
-These are treated as **errors**, but **no auto-fix is offered**, because the logic is ambiguous and should be resolved manually.
+These are treated as **errors**, but **no suggestion is offered**, because the logic is ambiguous and should be resolved manually.
 
 ### **6. Types with Non-Numeric Literals (`T | "nt" | null`)**
 
 When a variable's type includes non-numeric string literals (e.g. `number | "nt" | null` or `number | "nt"`):
 
-#### ❌ Flagged as Error (No Auto-Fix)
+#### ❌ Flagged as Error (No Suggestion)
 
 ```ts
 declare const val: number | 'nt' | null;
 Number(val);
 ```
 
-**Why is no auto-fix offered?**
-A suggestion like `(val !== null ? Number(val) : null)` would leave `Number(val)` with type `number | "nt"`. Passing `"nt"` to `Number("nt")` evaluates to `NaN`, introducing a hidden runtime bug. Because handling application-specific sentinel values (like `"nt"`) requires domain-specific business logic, the rule flags the issue without offering an auto-fix so you can resolve it safely and intentionally.
+**Why is no suggestion offered?**
+A suggestion like `(val !== null ? Number(val) : null)` would leave `Number(val)` with type `number | "nt"`. Passing `"nt"` to `Number("nt")` evaluates to `NaN`, introducing a hidden runtime bug. Because handling application-specific sentinel values (like `"nt"`) requires domain-specific business logic, the rule flags the issue without offering a suggestion so you can resolve it safely and intentionally.

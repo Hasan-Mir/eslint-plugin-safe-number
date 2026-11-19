@@ -22,6 +22,27 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
         }
       `,
         },
+        // Shadowed local Number passed as callback should not be flagged
+        {
+            code: `
+        function customMap(Number: (x: string | null) => number, arr: (string | null)[]) {
+          return arr.map(Number);
+        }
+      `,
+        },
+        // Regression: fixed .at(0) suggestions must pass the rule cleanly after narrowing
+        {
+            code: `
+        const x = [] as string[] | undefined;
+        (x?.[0] !== undefined ? Number(x?.[0]) : undefined);
+      `,
+        },
+        {
+            code: `
+        const x = [] as (string | null)[];
+        (x[0] !== null && x[0] !== undefined ? Number(x[0]) : x[0]);
+      `,
+        },
     ],
     invalid: [
         // 1. Direct Calls (Sanity check)
@@ -156,7 +177,7 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
                             messageId: 'fixStrictUndefined',
                             output: `
         const x = [] as string[] | undefined;
-        (x?.at(0) !== undefined ? Number(x?.[0]) : undefined);
+        (x?.[0] !== undefined ? Number(x?.[0]) : undefined);
       `,
                         },
                     ],
@@ -224,7 +245,7 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
         },
 
         // 10. Standard .at() Call (x.at(0))
-        // FIX: Expect x[0] inside Number() and parenthesized guard
+        // FIX: Expect x[0] in both guard and Number() so TypeScript narrows it
         {
             code: `
         const x = [] as (string | null)[];
@@ -238,7 +259,7 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
                             messageId: 'fixMixed',
                             output: `
         const x = [] as (string | null)[];
-        (x.at(0) !== null && x.at(0) !== undefined ? Number(x[0]) : x.at(0));
+        (x[0] !== null && x[0] !== undefined ? Number(x[0]) : x[0]);
       `,
                         },
                     ],
@@ -253,6 +274,14 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
         },
         {
             code: `Number("");`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+        {
+            code: `Number("   ");`,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+        {
+            code: 'Number(`nt`);',
             errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
         },
 
@@ -456,6 +485,162 @@ ruleTester.run('no-unsafe-number-conversion', noUnsafeNumberConversion, {
         {
             code: `Number("NaN");`,
             errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 26. Computed member access x[at](0) must not be rewritten as x[0]
+        {
+            code: `
+        const at = "getValue" as const;
+        declare const x: { getValue: (n: number) => string | null };
+        Number(x[at](0));
+      `,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 27. Non-indexable custom object with .at(0) must not be rewritten as x[0]
+        {
+            code: `
+        declare const list: { at(index: number): string | null };
+        Number(list.at(0));
+      `,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 28. Optional call x.at?.(0) must not be rewritten as x[0]
+        {
+            code: `
+        declare const x: { at?: (index: number) => string | null };
+        Number(x.at?.(0));
+      `,
+            errors: [{ messageId: 'unsafeConversion', suggestions: undefined }],
+        },
+
+        // 29. Rest parameter callback (Scenario B)
+        {
+            code: `
+        function applyAll(...fns: Array<(val: string | null) => number>) {
+          return fns.map(fn => fn(null));
+        }
+        applyAll(x => 1, Number);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
+        function applyAll(...fns: Array<(val: string | null) => number>) {
+          return fns.map(fn => fn(null));
+        }
+        applyAll(x => 1, val => val !== null ? Number(val) : null);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 30. Spread-shifted callback argument (Scenario B)
+        {
+            code: `
+        const prefix = ["a", 1] as const;
+        function run(a: string, b: number, cb: (val: string | null) => number) {
+          return cb(null);
+        }
+        run(...prefix, Number);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
+        const prefix = ["a", 1] as const;
+        function run(a: string, b: number, cb: (val: string | null) => number) {
+          return cb(null);
+        }
+        run(...prefix, val => val !== null ? Number(val) : null);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 31. Overloaded callback interface (Scenario B)
+        {
+            code: `
+        interface Parser {
+          (val: string): number;
+          (val: string | null): number;
+        }
+        declare function run(cb: Parser): void;
+        run(Number);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
+        interface Parser {
+          (val: string): number;
+          (val: string | null): number;
+        }
+        declare function run(cb: Parser): void;
+        run(val => val !== null ? Number(val) : null);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 32. Union of callable and non-callable callback type (Scenario B)
+        {
+            code: `
+        declare function run(cb: ((val: string | null) => number) | false): void;
+        run(Number);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
+        declare function run(cb: ((val: string | null) => number) | false): void;
+        run(val => val !== null ? Number(val) : null);
+      `,
+                        },
+                    ],
+                },
+            ],
+        },
+
+        // 33. Callback whose first parameter is a rest parameter (Scenario B)
+        {
+            code: `
+        declare function run(cb: (...args: (string | null)[]) => number): void;
+        run(Number);
+      `,
+            errors: [
+                {
+                    messageId: 'unsafeCallback',
+                    suggestions: [
+                        {
+                            messageId: 'fixMapStrictNull',
+                            output: `
+        declare function run(cb: (...args: (string | null)[]) => number): void;
+        run(val => val !== null ? Number(val) : null);
+      `,
+                        },
+                    ],
+                },
+            ],
         },
     ],
 });

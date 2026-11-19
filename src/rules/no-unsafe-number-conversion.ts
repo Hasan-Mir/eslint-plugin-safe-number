@@ -1,4 +1,10 @@
-import { AST_NODE_TYPES, ESLintUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
+import {
+    AST_NODE_TYPES,
+    ESLintUtils,
+    ParserServicesWithTypeInformation,
+    TSESLint,
+    TSESTree,
+} from '@typescript-eslint/utils';
 import ts from 'typescript';
 
 type MessageIds =
@@ -29,11 +35,11 @@ function isNonNumericStringLiteral(type: ts.Type): boolean {
 
 /**
  * Checks whether an identifier refers to the global ECMAScript Number constructor
- * rather than a shadowed local variable or parameter.
+ * rather than a shadowed local variable, parameter, or third-party .d.ts export.
  */
 function isGlobalNumber(
     node: TSESTree.Node,
-    services: ReturnType<typeof ESLintUtils.getParserServices>,
+    services: ParserServicesWithTypeInformation,
     checker: ts.TypeChecker
 ): boolean {
     const tsNode = services.esTreeNodeToTSNodeMap.get(node);
@@ -54,16 +60,25 @@ function isGlobalNumber(
     }
 
     return actualSymbol.declarations.some(decl => {
-        return decl.getSourceFile().isDeclarationFile;
+        return services.program.isSourceFileDefaultLibrary(decl.getSourceFile());
     });
 }
 
-function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
+function getNullableFlags(
+    type: ts.Type,
+    checker: ts.TypeChecker,
+    visited: Set<ts.Type> = new Set()
+) {
     let hasNull = false;
     let hasUndefined = false;
     let hasInvalidString = false;
 
     function checkType(t: ts.Type): void {
+        if (visited.has(t)) {
+            return;
+        }
+        visited.add(t);
+
         const flags = t.getFlags();
         const intrinsicName = (t as unknown as { intrinsicName?: string }).intrinsicName;
         const typeName = checker.typeToString(t);
@@ -113,7 +128,7 @@ function getNullableFlags(type: ts.Type, checker: ts.TypeChecker) {
             let intersectionHasInvalidString = false;
 
             for (const subType of t.types) {
-                const subFlags = getNullableFlags(subType, checker);
+                const subFlags = getNullableFlags(subType, checker, new Set(visited));
                 if (!subFlags.hasNull) {
                     allowsNull = false;
                 }
@@ -171,35 +186,56 @@ function isPureReference(node: TSESTree.Node): boolean {
 }
 
 /**
- * Checks if a node is a safe call to .at(0).
+ * Checks whether every non-nullable constituent of a type is an array, tuple, or string
+ * whose index 0 access (`[0]`) is semantically equivalent to `.at(0)`.
+ */
+function isIndexableByZero(type: ts.Type, checker: ts.TypeChecker): boolean {
+    const nonNullable = type.getNonNullableType();
+    if (nonNullable.isUnion()) {
+        return nonNullable.types.every(sub => isIndexableByZero(sub, checker));
+    }
+    return (
+        checker.isArrayType(nonNullable) ||
+        checker.isTupleType(nonNullable) ||
+        (nonNullable.getFlags() & ts.TypeFlags.StringLike) !== 0
+    );
+}
+
+/**
+ * Checks if a node is a safe call to .at(0) on an array, tuple, or string.
  * Handles: x.at(0) AND x?.at(0), ensuring the object is a pure reference.
  */
-function isSafeAtMethod(node: TSESTree.Node): boolean {
+function isSafeAtMethod(
+    node: TSESTree.Node,
+    services: ParserServicesWithTypeInformation,
+    checker: ts.TypeChecker
+): boolean {
     let target = node;
     if (target.type === AST_NODE_TYPES.ChainExpression) {
         target = target.expression;
     }
 
-    if (target.type === AST_NODE_TYPES.CallExpression) {
-        if (
-            target.callee.type === AST_NODE_TYPES.MemberExpression &&
-            target.callee.property.type === AST_NODE_TYPES.Identifier &&
-            target.callee.property.name === 'at' &&
-            target.arguments.length === 1 &&
-            target.arguments[0].type === AST_NODE_TYPES.Literal &&
-            target.arguments[0].value === 0 &&
-            isPureReference(target.callee.object)
-        ) {
-            return true;
-        }
+    if (
+        target.type === AST_NODE_TYPES.CallExpression &&
+        !target.optional &&
+        target.callee.type === AST_NODE_TYPES.MemberExpression &&
+        !target.callee.computed &&
+        target.callee.property.type === AST_NODE_TYPES.Identifier &&
+        target.callee.property.name === 'at' &&
+        target.arguments.length === 1 &&
+        target.arguments[0].type === AST_NODE_TYPES.Literal &&
+        target.arguments[0].value === 0 &&
+        isPureReference(target.callee.object)
+    ) {
+        const tsObj = services.esTreeNodeToTSNodeMap.get(target.callee.object);
+        return isIndexableByZero(checker.getTypeAtLocation(tsObj), checker);
     }
     return false;
 }
 
 /**
- * Generates the text for the argument inside Number().
- * If it detects .at(0), it converts it to [0].
- * If the call was optional (x?.at(0)), it converts to optional access (x?.[0]).
+ * Generates the index-access expression for a verified .at(0) call.
+ * Converts x.at(0) -> x[0] and x?.at(0) -> x?.[0] so TypeScript can narrow it.
  */
 function getConvertArgument(node: TSESTree.Node, sourceCode: TSESLint.SourceCode): string {
     let target = node;
@@ -209,7 +245,9 @@ function getConvertArgument(node: TSESTree.Node, sourceCode: TSESLint.SourceCode
 
     if (
         target.type === AST_NODE_TYPES.CallExpression &&
+        !target.optional &&
         target.callee.type === AST_NODE_TYPES.MemberExpression &&
+        !target.callee.computed &&
         target.callee.property.type === AST_NODE_TYPES.Identifier &&
         target.callee.property.name === 'at' &&
         target.arguments.length === 1 &&
@@ -227,6 +265,43 @@ function getConvertArgument(node: TSESTree.Node, sourceCode: TSESLint.SourceCode
     }
 
     return sourceCode.getText(node);
+}
+
+/**
+ * Collects all call signatures across a type, including callable constituents of a union
+ * and all overloads of an overloaded function type.
+ */
+function collectCallSignatures(type: ts.Type): readonly ts.Signature[] {
+    const nonNullable = type.getNonNullableType();
+    if (nonNullable.isUnion()) {
+        return nonNullable.types.flatMap(sub => collectCallSignatures(sub));
+    }
+    return nonNullable.getCallSignatures();
+}
+
+/**
+ * Resolves the type of the first argument that a callback signature passes to Number.
+ * Unwraps rest parameters (e.g. `(...args: (string | null)[]) => number`).
+ */
+function getFirstParamType(
+    sig: ts.Signature,
+    location: ts.Node,
+    checker: ts.TypeChecker
+): ts.Type | undefined {
+    if (sig.parameters.length === 0) {
+        return undefined;
+    }
+    const firstParam = sig.parameters[0];
+    const paramType = checker.getTypeOfSymbolAtLocation(firstParam, location);
+    const decl = firstParam.valueDeclaration;
+    if (decl && ts.isParameter(decl) && decl.dotDotDotToken) {
+        if (checker.isTupleType(paramType)) {
+            const typeArgs = checker.getTypeArguments(paramType as ts.TypeReference);
+            return typeArgs[0];
+        }
+        return checker.getIndexTypeOfType(paramType, ts.IndexKind.Number);
+    }
+    return paramType;
 }
 
 export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
@@ -305,11 +380,11 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                     );
 
                     if (hasNull || hasUndefined || hasInvalidString) {
-                        const argText = sourceCode.getText(argument);
-                        const convertText = getConvertArgument(argument, sourceCode);
-
-                        const isSafeToDuplicate =
-                            isPureReference(argument) || isSafeAtMethod(argument);
+                        const isAtMethod = isSafeAtMethod(argument, services, checker);
+                        const isSafeToDuplicate = isPureReference(argument) || isAtMethod;
+                        const exprText = isAtMethod
+                            ? getConvertArgument(argument, sourceCode)
+                            : sourceCode.getText(argument);
 
                         const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
 
@@ -320,7 +395,7 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                                     fix: fixer =>
                                         fixer.replaceText(
                                             node,
-                                            `(${argText} !== null && ${argText} !== undefined ? Number(${convertText}) : ${argText})`
+                                            `(${exprText} !== null && ${exprText} !== undefined ? Number(${exprText}) : ${exprText})`
                                         ),
                                 });
                             } else if (hasNull) {
@@ -329,7 +404,7 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                                     fix: fixer =>
                                         fixer.replaceText(
                                             node,
-                                            `(${argText} !== null ? Number(${convertText}) : null)`
+                                            `(${exprText} !== null ? Number(${exprText}) : null)`
                                         ),
                                 });
                             } else if (hasUndefined) {
@@ -338,7 +413,7 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                                     fix: fixer =>
                                         fixer.replaceText(
                                             node,
-                                            `(${argText} !== undefined ? Number(${convertText}) : undefined)`
+                                            `(${exprText} !== undefined ? Number(${exprText}) : undefined)`
                                         ),
                                 });
                             }
@@ -361,10 +436,6 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                 const tsCallNode = services.esTreeNodeToTSNodeMap.get(node);
                 const resolvedSignature = checker.getResolvedSignature(tsCallNode);
 
-                if (!resolvedSignature) {
-                    return;
-                }
-
                 node.arguments.forEach((arg, index) => {
                     // We only care if the argument is specifically global "Number"
                     if (
@@ -375,47 +446,53 @@ export const noUnsafeNumberConversion = createRule<Options, MessageIds>({
                         return;
                     }
 
-                    // 1. Find which parameter of the function definition matches this argument
-                    if (index >= resolvedSignature.parameters.length) {
+                    // 1. Resolve the expected callback type via contextual typing (handles rest params & spreads),
+                    // falling back to the resolved signature parameter if needed.
+                    const tsArgNode = services.esTreeNodeToTSNodeMap.get(arg);
+                    let paramType = ts.isExpression(tsArgNode)
+                        ? checker.getContextualType(tsArgNode)
+                        : undefined;
+
+                    if (
+                        !paramType &&
+                        resolvedSignature &&
+                        index < resolvedSignature.parameters.length
+                    ) {
+                        const paramSymbol = resolvedSignature.parameters[index];
+                        if (paramSymbol) {
+                            paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, tsCallNode);
+                        }
+                    }
+
+                    if (!paramType) {
                         return;
                     }
 
-                    const paramSymbol = resolvedSignature.parameters[index];
-                    if (!paramSymbol) {
-                        return;
-                    }
-
-                    // 2. Get the type of that parameter (Example: (val: string | null) => number)
-                    const paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, tsCallNode);
-
-                    // 3. Get the Call Signatures of that callback
-                    // Promise.then's callback is optional (Function | undefined).
-                    // We must get the NonNullable type to access the signatures of the Function part.
-                    const actualParamType = paramType.getNonNullableType();
-                    const callSignatures = actualParamType.getCallSignatures();
-
+                    // 2. Collect all call signatures across union constituents and overloads
+                    const callSignatures = collectCallSignatures(paramType);
                     if (callSignatures.length === 0) {
                         return;
                     }
 
-                    const callbackSignature = callSignatures[0];
+                    // 3. Inspect the first parameter of every signature (unwrapping rest params)
+                    let hasNull = false;
+                    let hasUndefined = false;
+                    let hasInvalidString = false;
 
-                    // 4. Look at the FIRST parameter of the callback (that's what Number will receive)
-                    if (callbackSignature.parameters.length === 0) {
-                        return;
+                    for (const callbackSignature of callSignatures) {
+                        const firstParamType = getFirstParamType(
+                            callbackSignature,
+                            tsCallNode,
+                            checker
+                        );
+                        if (!firstParamType) {
+                            continue;
+                        }
+                        const flags = getNullableFlags(firstParamType, checker);
+                        hasNull ||= flags.hasNull;
+                        hasUndefined ||= flags.hasUndefined;
+                        hasInvalidString ||= flags.hasInvalidString;
                     }
-
-                    const firstParamSymbol = callbackSignature.parameters[0];
-                    const firstParamType = checker.getTypeOfSymbolAtLocation(
-                        firstParamSymbol,
-                        tsCallNode
-                    );
-
-                    // 5. Check flags
-                    const { hasNull, hasUndefined, hasInvalidString } = getNullableFlags(
-                        firstParamType,
-                        checker
-                    );
 
                     if (hasNull || hasUndefined || hasInvalidString) {
                         const suggestions: TSESLint.SuggestionReportDescriptor<MessageIds>[] = [];
